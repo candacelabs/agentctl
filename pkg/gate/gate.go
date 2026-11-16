@@ -36,8 +36,28 @@ type Gate struct {
 	now    func() time.Time
 	newID  func() string
 
+	kinds      map[schema.Action]KindValidator
 	failClosed bool
 	mu         sync.RWMutex
+}
+
+// KindValidator checks the params of a registered action kind. Its error makes
+// the gate deny the request as invalid.
+type KindValidator func(params json.RawMessage) error
+
+// WithKind registers an action kind the built-in set does not know, for this
+// gate only (there is no global registry). A request of that action is
+// validated by validate (nil accepts any params), then decided, recorded and
+// replayed like a built-in kind. A built-in action cannot be overridden: the
+// built-in validation always wins. Unregistered unknown actions are still
+// denied at risk 100.
+func WithKind(action schema.Action, validate KindValidator) Option {
+	return func(g *Gate) {
+		if g.kinds == nil {
+			g.kinds = make(map[schema.Action]KindValidator)
+		}
+		g.kinds[action] = validate
+	}
 }
 
 // Option configures a Gate.
@@ -77,11 +97,12 @@ func New(pol *policy.Engine, tracer *trace.Store, opts ...Option) *Gate {
 }
 
 // Replay re-evaluates each recorded decision's request under engine and
-// returns the new decisions in order. Nothing is written to any trace store.
+// returns the new decisions in order. Options register the kinds the recorded
+// requests use (WithKind). Nothing is written to any trace store.
 // Reading the recorded decisions (a session's traces) is the caller's job.
-func Replay(engine *policy.Engine, recorded []schema.Decision) ([]schema.Decision, error) {
+func Replay(engine *policy.Engine, recorded []schema.Decision, opts ...Option) ([]schema.Decision, error) {
 	results := make([]schema.Decision, 0, len(recorded))
-	evaluator := New(engine, trace.NewWriterStore(io.Discard))
+	evaluator := New(engine, trace.NewWriterStore(io.Discard), opts...)
 
 	for _, tr := range recorded {
 		decision, err := evaluator.Evaluate(tr.Request)
@@ -100,7 +121,7 @@ func (g *Gate) Evaluate(req schema.ActionRequest) (*schema.Decision, error) {
 	start := g.now()
 
 	// 1. Validate the request
-	if err := validateRequest(req); err != nil {
+	if err := g.validateRequest(req); err != nil {
 		decision := &schema.Decision{
 			TraceID:        g.newID(),
 			Verdict:        schema.VerdictDeny,
@@ -168,7 +189,7 @@ func (g *Gate) record(d *schema.Decision) error {
 }
 
 // validateRequest checks that the action is known and params are valid.
-func validateRequest(req schema.ActionRequest) error {
+func (g *Gate) validateRequest(req schema.ActionRequest) error {
 	switch req.Action {
 	case schema.ActionInstallPackage:
 		var p schema.InstallPackageParams
@@ -211,7 +232,16 @@ func validateRequest(req schema.ActionRequest) error {
 			return fmt.Errorf("call_external_api: url required")
 		}
 	default:
-		return fmt.Errorf("unknown action: %s", req.Action)
+		validate, ok := g.kinds[req.Action]
+		if !ok {
+			return fmt.Errorf("unknown action: %s", req.Action)
+		}
+		if validate == nil {
+			return nil
+		}
+		if err := validate(req.Params); err != nil {
+			return fmt.Errorf("%s params: %w", req.Action, err)
+		}
 	}
 	return nil
 }

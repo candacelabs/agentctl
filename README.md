@@ -51,6 +51,35 @@ agentctl ui
 
 Everything else stays out of the control path.
 
+### Registering your own kinds
+
+The five kinds are the built-in set. A program that embeds `pkg/gate` can add kinds
+of its own, per gate (there is no global registry):
+
+```go
+engine, _ := policy.LoadFromBytes(policyYAML, policy.WithKindRisk("write_state", 25))
+g := gate.New(engine, tracer, gate.WithKind("write_state", func(params json.RawMessage) error {
+    // return an error to deny the request as invalid
+    return nil
+}))
+```
+
+A registered kind is validated, decided, recorded and replayed like a built-in one
+(pass the same `gate.WithKind` option to `gate.Replay`). A request whose kind is
+neither built in nor registered is still denied at risk 100, and a built-in kind
+cannot be overridden. A registered kind's policy lives under `actions.<kind>`:
+
+```yaml
+actions:
+  write_state:
+    block_param: table        # the string param that block_patterns match (substring)
+    block_patterns: ["secrets"]
+    require_approval: high_risk   # always | high_risk | never
+    base_risk: 40             # wins over policy.WithKindRisk
+```
+
+With no entry the kind is allowed at its default risk.
+
 ## CLI
 
 ```text

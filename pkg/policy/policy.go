@@ -39,7 +39,8 @@ type ActionPolicy struct {
 
 	// Code execution controls
 	BlockPatterns []string `yaml:"block_patterns,omitempty"`
-	Network       string   `yaml:"network,omitempty"` // "allow" or "deny"
+	BlockParam    string   `yaml:"block_param,omitempty"` // registered kinds: the string param block_patterns match
+	Network       string   `yaml:"network,omitempty"`     // "allow" or "deny"
 
 	// Approval
 	RequireApproval string `yaml:"require_approval,omitempty"` // "always", "high_risk", "never"
@@ -64,7 +65,22 @@ type EvalResult struct {
 
 // Engine evaluates action requests against a policy config.
 type Engine struct {
-	config Config
+	config   Config
+	kindRisk map[schema.Action]int
+}
+
+// Option configures an Engine at load time.
+type Option func(*Engine)
+
+// WithKindRisk sets the default base risk of a kind the built-in set does not
+// know (a kind registered on the gate). A base_risk in the policy file wins.
+func WithKindRisk(action schema.Action, risk int) Option {
+	return func(e *Engine) {
+		if e.kindRisk == nil {
+			e.kindRisk = make(map[schema.Action]int)
+		}
+		e.kindRisk[action] = risk
+	}
 }
 
 // Default risk scores per action type.
@@ -77,21 +93,25 @@ var defaultRisk = map[schema.Action]int{
 }
 
 // LoadFromFile loads a policy from a YAML file.
-func LoadFromFile(path string) (*Engine, error) {
+func LoadFromFile(path string, opts ...Option) (*Engine, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading policy file: %w", err)
 	}
-	return LoadFromBytes(data)
+	return LoadFromBytes(data, opts...)
 }
 
 // LoadFromBytes loads a policy from YAML bytes.
-func LoadFromBytes(data []byte) (*Engine, error) {
+func LoadFromBytes(data []byte, opts ...Option) (*Engine, error) {
 	var config Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parsing policy: %w", err)
 	}
-	return &Engine{config: config}, nil
+	e := &Engine{config: config}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e, nil
 }
 
 // DefaultEngine returns an engine with sensible defaults:
@@ -122,7 +142,10 @@ func (e *Engine) Evaluate(req schema.ActionRequest) EvalResult {
 	actionPolicy, exists := e.config.Actions[actionStr]
 
 	// Base risk score
-	risk := defaultRisk[req.Action]
+	risk, known := defaultRisk[req.Action]
+	if !known {
+		risk = e.kindRisk[req.Action]
+	}
 	if exists && actionPolicy.BaseRisk != nil {
 		risk = *actionPolicy.BaseRisk
 	}
@@ -248,6 +271,26 @@ func (e *Engine) Evaluate(req schema.ActionRequest) EvalResult {
 					RiskScore:    100,
 					Reason:       fmt.Sprintf("requested TTL %d exceeds max_ttl %d", params.TTL, actionPolicy.MaxTTL),
 					MatchedRules: []string{"max_ttl"},
+				}
+			}
+		}
+	}
+
+	// Registered kinds: block_patterns match a named string param
+	if _, builtin := defaultRisk[req.Action]; !builtin && actionPolicy.BlockParam != "" {
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(req.Params, &params); err == nil {
+			var value string
+			if json.Unmarshal(params[actionPolicy.BlockParam], &value) == nil {
+				for _, pattern := range actionPolicy.BlockPatterns {
+					if strings.Contains(value, pattern) {
+						return EvalResult{
+							Verdict:      schema.VerdictDeny,
+							RiskScore:    100,
+							Reason:       fmt.Sprintf("param %q matches blocked pattern: %q", actionPolicy.BlockParam, pattern),
+							MatchedRules: []string{"block_pattern:" + pattern},
+						}
+					}
 				}
 			}
 		}
