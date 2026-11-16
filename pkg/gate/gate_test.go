@@ -3,6 +3,7 @@ package gate
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,48 @@ func TestReplayChangesDecisionUnderStricterPolicy(t *testing.T) {
 				if got[i].Verdict != v {
 					t.Fatalf("decision %d verdict = %s, want %s", i, got[i].Verdict, v)
 				}
+			}
+		})
+	}
+}
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestEvaluateFailClosedOnTraceError(t *testing.T) {
+	params, err := json.Marshal(schema.RunCodeParams{Command: "ls"})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	req := schema.ActionRequest{Action: schema.ActionRunCode, Params: params}
+	invalid := schema.ActionRequest{Action: schema.ActionRunCode, Params: []byte(`{}`)}
+	writeErr := errors.New("disk full")
+
+	tests := []struct {
+		name         string
+		opts         []Option
+		req          schema.ActionRequest
+		wantErr      bool
+		wantDecision bool
+	}{
+		{name: "default answers despite trace error", req: req, wantDecision: true},
+		{name: "fail closed returns error", opts: []Option{WithFailClosed()}, req: req, wantErr: true},
+		{name: "fail closed on invalid request", opts: []Option{WithFailClosed()}, req: invalid, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g := New(policy.DefaultEngine(), trace.NewWriterStore(failingWriter{err: writeErr}), tc.opts...)
+			d, err := g.Evaluate(tc.req)
+			if tc.wantErr {
+				if !errors.Is(err, writeErr) {
+					t.Fatalf("Evaluate() error = %v, want wrapping %v", err, writeErr)
+				}
+			} else if err != nil {
+				t.Fatalf("Evaluate() error = %v", err)
+			}
+			if tc.wantDecision != (d != nil) {
+				t.Fatalf("decision = %v, want present=%v", d, tc.wantDecision)
 			}
 		})
 	}

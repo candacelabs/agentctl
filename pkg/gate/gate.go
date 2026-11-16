@@ -35,7 +35,9 @@ type Gate struct {
 	tracer *trace.Store
 	now    func() time.Time
 	newID  func() string
-	mu     sync.RWMutex
+
+	failClosed bool
+	mu         sync.RWMutex
 }
 
 // Option configures a Gate.
@@ -51,6 +53,13 @@ func WithClock(now func() time.Time) Option {
 // UUID string per decision.
 func WithIDSource(newID func() string) Option {
 	return func(g *Gate) { g.newID = newID }
+}
+
+// WithFailClosed makes Evaluate return the trace store's error, wrapped with
+// %w and without a decision, when recording the decision fails. By default the
+// error is printed to stderr and the decision is still returned.
+func WithFailClosed() Option {
+	return func(g *Gate) { g.failClosed = true }
 }
 
 // New creates a gate with the given policy engine and trace store.
@@ -101,7 +110,9 @@ func (g *Gate) Evaluate(req schema.ActionRequest) (*schema.Decision, error) {
 			Reason:         fmt.Sprintf("invalid request: %v", err),
 			EvalDurationMs: float64(g.now().Sub(start).Microseconds()) / 1000,
 		}
-		g.record(decision)
+		if err := g.record(decision); err != nil {
+			return nil, err
+		}
 		return decision, nil
 	}
 
@@ -127,7 +138,9 @@ func (g *Gate) Evaluate(req schema.ActionRequest) (*schema.Decision, error) {
 	}
 
 	// 4. Record trace (async, non-blocking)
-	g.record(decision)
+	if err := g.record(decision); err != nil {
+		return nil, err
+	}
 
 	return decision, nil
 }
@@ -139,12 +152,19 @@ func (g *Gate) ReloadPolicy(pol *policy.Engine) {
 	g.mu.Unlock()
 }
 
-func (g *Gate) record(d *schema.Decision) {
-	if g.tracer != nil {
-		if err := g.tracer.Record(d); err != nil {
-			fmt.Fprintf(os.Stderr, "agentctl: %v\n", err)
-		}
+// record writes the decision's trace. It returns an error only when the gate
+// fails closed; otherwise the error is reported on stderr.
+func (g *Gate) record(d *schema.Decision) error {
+	if g.tracer == nil {
+		return nil
 	}
+	if err := g.tracer.Record(d); err != nil {
+		if g.failClosed {
+			return fmt.Errorf("recording trace: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "agentctl: %v\n", err)
+	}
+	return nil
 }
 
 // validateRequest checks that the action is known and params are valid.
