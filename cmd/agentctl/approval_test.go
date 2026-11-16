@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chocks/agentctl/pkg/approval"
 	"github.com/chocks/agentctl/pkg/schema"
 )
 
@@ -23,23 +24,23 @@ func TestRecordAndResolveApproval(t *testing.T) {
 		},
 	}
 
-	if err := recordApprovalForDecision(path, decision); err != nil {
-		t.Fatalf("recordApprovalForDecision() error = %v", err)
+	if err := approval.RecordForDecision(approval.NewFileStore(path), decision); err != nil {
+		t.Fatalf("RecordForDecision() error = %v", err)
 	}
 
-	records, err := readApprovals(path, approvalStatusPending)
+	records, err := approval.List(approval.NewFileStore(path), approval.StatusPending)
 	if err != nil {
-		t.Fatalf("readApprovals() error = %v", err)
+		t.Fatalf("List() error = %v", err)
 	}
 	if len(records) != 1 {
 		t.Fatalf("expected 1 pending approval, got %d", len(records))
 	}
 
-	resolved, err := resolveApproval(path, "trace-1", approvalStatusApproved, "alice")
+	resolved, err := resolveApprovalByStatus(approval.NewFileStore(path), "trace-1", approval.StatusApproved, "alice")
 	if err != nil {
-		t.Fatalf("resolveApproval() error = %v", err)
+		t.Fatalf("resolveApprovalByStatus() error = %v", err)
 	}
-	if resolved.Status != approvalStatusApproved {
+	if resolved.Status != approval.StatusApproved {
 		t.Fatalf("expected approved status, got %s", resolved.Status)
 	}
 	if resolved.ResolvedBy != "alice" {

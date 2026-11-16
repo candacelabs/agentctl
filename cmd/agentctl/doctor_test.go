@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chocks/agentctl/pkg/approval"
 	"github.com/chocks/agentctl/pkg/config"
 	"github.com/chocks/agentctl/pkg/schema"
 )
@@ -96,7 +97,7 @@ func TestRunDoctorCountsExistingFiles(t *testing.T) {
 	if err := os.WriteFile(paths.Traces, []byte(`{"trace_id":"trace-1","verdict":"allow","risk_score":10,"timestamp":"2026-04-12T12:00:00Z","request":{"action":"run_code","params":{"command":"ls"},"reason":"test","context":{"session_id":"session-1","timestamp":"2026-04-12T12:00:00Z"}},"reason":"ok","eval_duration_ms":1}`+"\n"), 0644); err != nil {
 		t.Fatalf("WriteFile(traces) error = %v", err)
 	}
-	if err := recordApprovalForDecision(paths.Approvals, decision); err != nil {
+	if err := approval.RecordForDecision(approval.NewFileStore(paths.Approvals), decision); err != nil {
 		t.Fatalf("recordApprovalForDecision() error = %v", err)
 	}
 

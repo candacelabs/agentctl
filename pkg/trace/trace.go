@@ -45,6 +45,14 @@ func NewFileStore(path string) (*Store, error) {
 	return &Store{writer: f, chainID: chainID, lastSeq: lastSeq, lastHash: lastHash}, nil
 }
 
+// NewChainStore creates a trace store that writes to any io.Writer and
+// continues an existing chain: the next record gets seq lastSeq+1 and links to
+// lastHash. It is what NewFileStore builds from the head of a file (chain id,
+// last seq, last hash), for callers that keep their records elsewhere.
+func NewChainStore(w io.Writer, chainID string, lastSeq uint64, lastHash string) *Store {
+	return &Store{writer: w, chainID: chainID, lastSeq: lastSeq, lastHash: lastHash}
+}
+
 // NewWriterStore creates a trace store that writes to any io.Writer.
 // Useful for stdout, testing, or discarding (replay). Its chain starts fresh.
 func NewWriterStore(w io.Writer) *Store {
@@ -52,10 +60,11 @@ func NewWriterStore(w io.Writer) *Store {
 }
 
 // Record appends a decision to the trace store as the next link in the chain.
-// Trace failures are logged but never block the gate. The chain head is only
-// advanced after a successful write, so a failed write cannot leave a dangling
-// prev_hash on disk.
-func (s *Store) Record(d *schema.Decision) {
+// It returns any hash, marshal, or write error; callers that must not block on
+// a trace failure (the gate, the hook) log it and carry on. The chain head is
+// only advanced after a successful write, so a failed write cannot leave a
+// dangling prev_hash on disk.
+func (s *Store) Record(d *schema.Decision) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -67,25 +76,23 @@ func (s *Store) Record(d *schema.Decision) {
 	}
 	hash, err := rec.computeHash()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentctl: trace hash error: %v\n", err)
-		return
+		return fmt.Errorf("trace hash error: %w", err)
 	}
 	rec.Hash = hash
 
 	data, err := json.Marshal(rec)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentctl: trace marshal error: %v\n", err)
-		return
+		return fmt.Errorf("trace marshal error: %w", err)
 	}
 
 	data = append(data, '\n')
 	if _, err := s.writer.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "agentctl: trace write error: %v\n", err)
-		return
+		return fmt.Errorf("trace write error: %w", err)
 	}
 
 	s.lastSeq = rec.Seq
 	s.lastHash = rec.Hash
+	return nil
 }
 
 // ── Query support (for replay and audit) ────────────────────────────────────
@@ -114,8 +121,14 @@ func ReadTraces(path string, filter TraceFilter) ([]schema.Decision, error) {
 		_ = f.Close()
 	}()
 
+	return ReadTracesFrom(f, filter)
+}
+
+// ReadTracesFrom reads and filters traces from JSON lines in r. It is the
+// reader form of ReadTraces, for callers whose traces are not in a file.
+func ReadTracesFrom(r io.Reader, filter TraceFilter) ([]schema.Decision, error) {
 	var all []schema.Decision
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024) // allow lines up to 4 MB
 	for scanner.Scan() {
 		line := scanner.Bytes()

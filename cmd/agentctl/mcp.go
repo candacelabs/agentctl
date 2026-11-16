@@ -37,6 +37,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/chocks/agentctl/pkg/approval"
 	"github.com/chocks/agentctl/pkg/config"
 	"github.com/chocks/agentctl/pkg/gate"
 	"github.com/chocks/agentctl/pkg/schema"
@@ -360,7 +361,7 @@ func (s *mcpServer) handleToolsCall(id json.RawMessage, rawParams json.RawMessag
 		return errorResponse(id, codeInternalError, "gate evaluation failed: "+err.Error())
 	}
 
-	if err := recordApprovalForDecision(s.approvalPath, decision); err != nil {
+	if err := approval.RecordForDecision(approval.NewFileStore(s.approvalPath), decision); err != nil {
 		fmt.Fprintf(os.Stderr, "agentctl mcp: error recording approval: %v\n", err)
 	}
 

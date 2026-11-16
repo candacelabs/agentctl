@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,8 +123,14 @@ func ReadRecords(path string, filter TraceFilter) ([]Record, error) {
 	}
 	defer func() { _ = f.Close() }()
 
+	return ReadRecordsFrom(f, filter)
+}
+
+// ReadRecordsFrom reads hash-chained records from JSON lines in r. It is the
+// reader form of ReadRecords, for callers whose records are not in a file.
+func ReadRecordsFrom(r io.Reader, filter TraceFilter) ([]Record, error) {
 	var all []Record
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()

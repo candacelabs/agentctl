@@ -11,25 +11,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 
 	"github.com/chocks/agentctl/pkg/config"
 	"github.com/chocks/agentctl/pkg/trace"
 )
-
-// chainReport is the per-chain verification result, used for --json output.
-type chainReport struct {
-	ChainID   string             `json:"chain_id"`
-	Integrity trace.VerifyResult `json:"integrity"`
-}
-
-// verifyReport is the full output of `trace verify`.
-type verifyReport struct {
-	Source       string                   `json:"source"`
-	Chains       []chainReport            `json:"chains"`
-	Completeness trace.CompletenessResult `json:"completeness"`
-	Verified     bool                     `json:"verified"`
-}
 
 func cmdTraceVerify(paths config.Paths) {
 	source := paths.Traces
@@ -44,25 +29,8 @@ func cmdTraceVerify(paths config.Paths) {
 		os.Exit(1)
 	}
 
-	byChain := trace.GroupByChain(records)
-	chainIDs := make([]string, 0, len(byChain))
-	for id := range byChain {
-		chainIDs = append(chainIDs, id)
-	}
-	sort.Strings(chainIDs)
-
-	report := verifyReport{Source: source, Verified: true}
-	for _, id := range chainIDs {
-		res := trace.VerifyChain(byChain[id])
-		report.Chains = append(report.Chains, chainReport{ChainID: id, Integrity: res})
-		if !res.OK {
-			report.Verified = false
-		}
-	}
-	report.Completeness = trace.CheckCompleteness(records)
-	if !report.Completeness.Complete {
-		report.Verified = false
-	}
+	report := trace.Verify(records)
+	report.Source = source
 
 	if asJSON {
 		out, err := json.MarshalIndent(report, "", "  ")
@@ -80,7 +48,7 @@ func cmdTraceVerify(paths config.Paths) {
 	}
 }
 
-func printVerifyReport(report verifyReport) {
+func printVerifyReport(report trace.VerifyReport) {
 	fmt.Printf("trace store: %s\n", report.Source)
 	if len(report.Chains) == 0 {
 		fmt.Println("no chained records found")

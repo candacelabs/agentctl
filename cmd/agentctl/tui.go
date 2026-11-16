@@ -6,12 +6,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	tuiapp "github.com/chocks/agentctl/cmd/agentctl/tui"
+	"github.com/chocks/agentctl/pkg/approval"
 	"github.com/chocks/agentctl/pkg/config"
 )
 
 func cmdTUI(paths config.Paths) {
 	loader := func() ([]tuiapp.Approval, error) {
-		records, err := readApprovals(paths.Approvals, approvalStatusPending)
+		records, err := approval.List(approval.NewFileStore(paths.Approvals), approval.StatusPending)
 		if err != nil {
 			return nil, err
 		}
@@ -30,7 +31,7 @@ func cmdTUI(paths config.Paths) {
 	}
 
 	resolver := func(approvalID, status string) error {
-		_, err := resolveApproval(paths.Approvals, approvalID, approvalStatus(status), "tui")
+		_, err := resolveApprovalByStatus(approval.NewFileStore(paths.Approvals), approvalID, approval.Status(status), "tui")
 		return err
 	}
 

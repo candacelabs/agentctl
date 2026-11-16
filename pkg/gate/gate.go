@@ -18,6 +18,8 @@ package gate
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -31,32 +33,73 @@ import (
 type Gate struct {
 	policy *policy.Engine
 	tracer *trace.Store
+	now    func() time.Time
+	newID  func() string
 	mu     sync.RWMutex
 }
 
+// Option configures a Gate.
+type Option func(*Gate)
+
+// WithClock sets the time source for decision timestamps and evaluation
+// durations. The default is time.Now.
+func WithClock(now func() time.Time) Option {
+	return func(g *Gate) { g.now = now }
+}
+
+// WithIDSource sets the source of decision trace ids. The default is a new
+// UUID string per decision.
+func WithIDSource(newID func() string) Option {
+	return func(g *Gate) { g.newID = newID }
+}
+
 // New creates a gate with the given policy engine and trace store.
-func New(pol *policy.Engine, tracer *trace.Store) *Gate {
-	return &Gate{
+func New(pol *policy.Engine, tracer *trace.Store, opts ...Option) *Gate {
+	g := &Gate{
 		policy: pol,
 		tracer: tracer,
+		now:    time.Now,
+		newID:  func() string { return uuid.New().String() },
 	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
+}
+
+// Replay re-evaluates each recorded decision's request under engine and
+// returns the new decisions in order. Nothing is written to any trace store.
+// Reading the recorded decisions (a session's traces) is the caller's job.
+func Replay(engine *policy.Engine, recorded []schema.Decision) ([]schema.Decision, error) {
+	results := make([]schema.Decision, 0, len(recorded))
+	evaluator := New(engine, trace.NewWriterStore(io.Discard))
+
+	for _, tr := range recorded {
+		decision, err := evaluator.Evaluate(tr.Request)
+		if err != nil {
+			return nil, fmt.Errorf("re-evaluating trace: %w", err)
+		}
+		results = append(results, *decision)
+	}
+
+	return results, nil
 }
 
 // Evaluate is the core primitive. It takes an action request,
 // evaluates it against policy, records the trace, and returns a decision.
 func (g *Gate) Evaluate(req schema.ActionRequest) (*schema.Decision, error) {
-	start := time.Now()
+	start := g.now()
 
 	// 1. Validate the request
 	if err := validateRequest(req); err != nil {
 		decision := &schema.Decision{
-			TraceID:        uuid.New().String(),
+			TraceID:        g.newID(),
 			Verdict:        schema.VerdictDeny,
 			RiskScore:      100,
-			Timestamp:      time.Now(),
+			Timestamp:      g.now(),
 			Request:        req,
 			Reason:         fmt.Sprintf("invalid request: %v", err),
-			EvalDurationMs: float64(time.Since(start).Microseconds()) / 1000,
+			EvalDurationMs: float64(g.now().Sub(start).Microseconds()) / 1000,
 		}
 		g.record(decision)
 		return decision, nil
@@ -69,14 +112,14 @@ func (g *Gate) Evaluate(req schema.ActionRequest) (*schema.Decision, error) {
 
 	// 3. Build decision
 	decision := &schema.Decision{
-		TraceID:        uuid.New().String(),
+		TraceID:        g.newID(),
 		Verdict:        result.Verdict,
 		RiskScore:      result.RiskScore,
-		Timestamp:      time.Now(),
+		Timestamp:      g.now(),
 		Request:        req,
 		Reason:         result.Reason,
 		MatchedRules:   result.MatchedRules,
-		EvalDurationMs: float64(time.Since(start).Microseconds()) / 1000,
+		EvalDurationMs: float64(g.now().Sub(start).Microseconds()) / 1000,
 	}
 
 	if result.Verdict == schema.VerdictEscalate {
@@ -98,7 +141,9 @@ func (g *Gate) ReloadPolicy(pol *policy.Engine) {
 
 func (g *Gate) record(d *schema.Decision) {
 	if g.tracer != nil {
-		g.tracer.Record(d)
+		if err := g.tracer.Record(d); err != nil {
+			fmt.Fprintf(os.Stderr, "agentctl: %v\n", err)
+		}
 	}
 }
 

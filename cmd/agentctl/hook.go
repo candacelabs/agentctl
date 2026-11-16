@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chocks/agentctl/pkg/approval"
 	"github.com/chocks/agentctl/pkg/config"
 	"github.com/chocks/agentctl/pkg/gate"
 	"github.com/chocks/agentctl/pkg/schema"
@@ -131,7 +132,7 @@ func cmdHookClaudeCode(paths config.Paths) {
 		os.Exit(0) // Fail open.
 	}
 
-	if err := recordApprovalForDecision(paths.Approvals, decision); err != nil {
+	if err := approval.RecordForDecision(approval.NewFileStore(paths.Approvals), decision); err != nil {
 		fmt.Fprintf(os.Stderr, "agentctl hook: error recording approval: %v\n", err)
 	}
 

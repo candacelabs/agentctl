@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chocks/agentctl/pkg/approval"
 	"github.com/chocks/agentctl/pkg/config"
 	"github.com/chocks/agentctl/pkg/gate"
 	"github.com/chocks/agentctl/pkg/policy"
@@ -130,7 +131,7 @@ func cmdGate(paths config.Paths) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := recordApprovalForDecision(paths.Approvals, decision); err != nil {
+	if err := approval.RecordForDecision(approval.NewFileStore(paths.Approvals), decision); err != nil {
 		fmt.Fprintf(os.Stderr, "error recording approval: %v\n", err)
 		os.Exit(1)
 	}
@@ -402,17 +403,5 @@ func replaySession(pol *policy.Engine, traceFile, sessionID string, limit int) (
 		return nil, fmt.Errorf("reading traces: %w", err)
 	}
 
-	// Re-evaluate each trace with the new policy
-	results := make([]schema.Decision, 0, len(traces))
-	evaluator := gate.New(pol, trace.NewWriterStore(io.Discard))
-
-	for _, tr := range traces {
-		decision, err := evaluator.Evaluate(tr.Request)
-		if err != nil {
-			return nil, fmt.Errorf("re-evaluating trace: %w", err)
-		}
-		results = append(results, *decision)
-	}
-
-	return results, nil
+	return gate.Replay(pol, traces)
 }

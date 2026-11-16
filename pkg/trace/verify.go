@@ -134,3 +134,46 @@ func GroupByChain(records []Record) map[string][]Record {
 	}
 	return out
 }
+
+// ChainReport is the per-chain verification result in a VerifyReport.
+type ChainReport struct {
+	ChainID   string       `json:"chain_id"`
+	Integrity VerifyResult `json:"integrity"`
+}
+
+// VerifyReport is the full result of verifying a record population: integrity
+// per chain plus completeness across all of them. It is the JSON shape of
+// `agentctl trace verify --json`.
+type VerifyReport struct {
+	Source       string             `json:"source"`
+	Chains       []ChainReport      `json:"chains"`
+	Completeness CompletenessResult `json:"completeness"`
+	Verified     bool               `json:"verified"`
+}
+
+// Verify checks every chain in records for integrity (VerifyChain, chains in
+// sorted id order) and the population for completeness (CheckCompleteness).
+// Verified is true only when all chains are intact and no sequence gap exists.
+// Source is left empty; the caller labels where the records came from.
+func Verify(records []Record) VerifyReport {
+	byChain := GroupByChain(records)
+	chainIDs := make([]string, 0, len(byChain))
+	for id := range byChain {
+		chainIDs = append(chainIDs, id)
+	}
+	sort.Strings(chainIDs)
+
+	report := VerifyReport{Verified: true}
+	for _, id := range chainIDs {
+		res := VerifyChain(byChain[id])
+		report.Chains = append(report.Chains, ChainReport{ChainID: id, Integrity: res})
+		if !res.OK {
+			report.Verified = false
+		}
+	}
+	report.Completeness = CheckCompleteness(records)
+	if !report.Completeness.Complete {
+		report.Verified = false
+	}
+	return report
+}

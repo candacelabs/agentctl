@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/chocks/agentctl/pkg/approval"
 	"github.com/chocks/agentctl/pkg/attach"
 	"github.com/chocks/agentctl/pkg/config"
 	"github.com/chocks/agentctl/pkg/trace"
@@ -114,7 +115,7 @@ func doctorApprovalStatus(path string) (string, string, error) {
 		return "error", err.Error(), err
 	}
 
-	records, err := readApprovals(path, approvalStatusPending)
+	records, err := approval.List(approval.NewFileStore(path), approval.StatusPending)
 	if err != nil {
 		return "error", err.Error(), err
 	}
